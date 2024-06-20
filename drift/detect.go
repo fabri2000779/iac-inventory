@@ -3,7 +3,6 @@ package drift
 import (
 	"drifter/aws"
 	"encoding/json"
-	"fmt"
 	initAws "github.com/aws/aws-sdk-go-v2/aws"
 )
 
@@ -29,11 +28,11 @@ type TerraformState struct {
 	} `json:"resources"`
 }
 
-func DetectDrift(stateData []byte, cfg initAws.Config) ([]byte, error) {
+func DetectDrift(stateData []byte, cfg initAws.Config) (map[string]struct{}, map[string]struct{}, error) {
 	var tfState TerraformState
 	err := json.Unmarshal(stateData, &tfState)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	managedResourcesMap := make(map[string]struct{})
@@ -46,27 +45,41 @@ func DetectDrift(stateData []byte, cfg initAws.Config) ([]byte, error) {
 		}
 	}
 
-	fmt.Println(managedResourcesMap)
-
-	var managedResources, unmanagedResources []string
 	currentInstances, err := aws.ListEC2Instances(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+
+	managedResources := make(map[string]struct{})
+	unmanagedResources := make(map[string]struct{})
 
 	for _, instanceID := range currentInstances {
 		if _, ok := managedResourcesMap[instanceID]; ok {
-			managedResources = append(managedResources, instanceID)
+			managedResources[instanceID] = struct{}{}
 		} else {
-			unmanagedResources = append(unmanagedResources, instanceID)
+			unmanagedResources[instanceID] = struct{}{}
 		}
 	}
 
+	return managedResources, unmanagedResources, nil
+}
+
+func FormatOutput(managedResources, unmanagedResources map[string]struct{}) ([]byte, error) {
+	managedList := make([]string, 0, len(managedResources))
+	for id := range managedResources {
+		managedList = append(managedList, id)
+	}
+
+	unmanagedList := make([]string, 0, len(unmanagedResources))
+	for id := range unmanagedResources {
+		unmanagedList = append(unmanagedList, id)
+	}
+
 	output := Output{
-		ManagedByIAC: managedResources,
-		NotManaged:   unmanagedResources,
-		TotalManaged: len(managedResources),
-		Unmanaged:    len(unmanagedResources),
+		ManagedByIAC: managedList,
+		NotManaged:   unmanagedList,
+		TotalManaged: len(managedList),
+		Unmanaged:    len(unmanagedList),
 	}
 
 	outputJSON, err := json.MarshalIndent(output, "", "  ")

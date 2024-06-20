@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"bytes"
 	initAws "github.com/aws/aws-sdk-go-v2/aws"
 	"log"
 
@@ -15,7 +14,8 @@ func Run(cfg initAws.Config) ([]byte, error) {
 		return nil, err
 	}
 
-	var detectDrifts [][]byte
+	managedResources := make(map[string]struct{})
+	unmanagedResources := make(map[string]struct{})
 
 	for _, bucket := range buckets {
 		keys, err := aws.ListObjects(cfg, bucket)
@@ -31,15 +31,25 @@ func Run(cfg initAws.Config) ([]byte, error) {
 				continue
 			}
 
-			detectDrift, err := drift.DetectDrift(stateData, cfg)
+			managed, unmanaged, err := drift.DetectDrift(stateData, cfg)
 			if err != nil {
 				log.Printf("failed to detect drift in bucket %s, key %s: %v", bucket, key, err)
 				continue
 			}
 
-			detectDrifts = append(detectDrifts, detectDrift)
+			for id := range managed {
+				managedResources[id] = struct{}{}
+			}
+			for id := range unmanaged {
+				unmanagedResources[id] = struct{}{}
+			}
 		}
 	}
 
-	return bytes.Join(detectDrifts, []byte("\n")), nil
+	output, err := drift.FormatOutput(managedResources, unmanagedResources)
+	if err != nil {
+		return nil, err
+	}
+
+	return output, nil
 }
