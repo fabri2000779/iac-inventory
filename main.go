@@ -15,7 +15,7 @@ func main() {
 		log.Fatalf("unable to load AWS SDK config, %v", err)
 	}
 
-	drft, err := controller.Run(cfg)
+	drft, err := controller.Run(cfg, []string{"eu-west-1", "eu-central-1", "us-east-1"})
 	if err != nil {
 		log.Fatalf("controller run failed: %v", err)
 	}

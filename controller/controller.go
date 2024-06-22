@@ -14,7 +14,7 @@ const (
 	readRoleArnFormat = "arn:aws:iam::%s:role/ReadOnlyRole" //
 )
 
-func Run(cfg initAws.Config) ([]byte, error) {
+func Run(cfg initAws.Config, regions []string) ([]byte, error) {
 	// List all accounts in the organization using the management configuration
 	accountIDs, err := aws.ListAccounts(cfg)
 	if err != nil {
@@ -25,7 +25,7 @@ func Run(cfg initAws.Config) ([]byte, error) {
 	unmanagedResources := make(map[string]map[string]struct{})
 
 	// Initialize maps for each resource type
-	resourceTypes := []string{"aws_instance", "aws_db_instance", "aws_lambda_function"}
+	resourceTypes := []string{"aws_instance", "aws_db_instance", "aws_lambda_function", "aws_autoscaling_group"}
 	for _, resourceType := range resourceTypes {
 		managedResources[resourceType] = make(map[string]struct{})
 		unmanagedResources[resourceType] = make(map[string]struct{})
@@ -75,7 +75,7 @@ func Run(cfg initAws.Config) ([]byte, error) {
 					}
 
 					// Detect drift for the resources
-					managed, unmanaged, err := drift.DetectDriftForResources(arns, accountCfg)
+					managed, unmanaged, err := drift.DetectDriftForResources(arns, accountCfg, regions)
 					if err != nil {
 						log.Printf("failed to detect drift for account %s: %v", accountID, err)
 						continue

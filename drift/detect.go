@@ -29,7 +29,7 @@ type TerraformState struct {
 	} `json:"resources"`
 }
 
-// ExtractResourceIdentifiers extracts identifiers for EC2 instances, RDS instances, and Lambda functions from the Terraform state data
+// ExtractResourceIdentifiers extracts identifiers for EC2 instances, RDS instances, Lambda functions, and ASGs from the Terraform state data
 func ExtractResourceIdentifiers(stateData []byte) ([]ARN, error) {
 	var tfState TerraformState
 	err := json.Unmarshal(stateData, &tfState)
@@ -39,7 +39,7 @@ func ExtractResourceIdentifiers(stateData []byte) ([]ARN, error) {
 
 	var arns []ARN
 	for _, resource := range tfState.Resources {
-		if resource.Type == "aws_instance" || resource.Type == "aws_db_instance" || resource.Type == "aws_lambda_function" {
+		if resource.Type == "aws_instance" || resource.Type == "aws_db_instance" || resource.Type == "aws_lambda_function" || resource.Type == "aws_autoscaling_group" {
 			for _, instance := range resource.Instances {
 				var resourceID string
 				if resource.Type == "aws_db_instance" {
@@ -66,59 +66,63 @@ func ExtractResourceIdentifiers(stateData []byte) ([]ARN, error) {
 	return arns, nil
 }
 
-// DetectDriftForResources detects drift for EC2 instances, RDS instances, and Lambda functions
-func DetectDriftForResources(resourceIdentifiers []ARN, cfg initAws.Config) (map[string]map[string]struct{}, map[string]map[string]struct{}, error) {
+// DetectDriftForResources detects drift for EC2 instances, RDS instances, Lambda functions, and ASGs in the specified regions
+func DetectDriftForResources(resourceIdentifiers []ARN, cfg initAws.Config, regions []string) (map[string]map[string]struct{}, map[string]map[string]struct{}, error) {
 	managedResources := make(map[string]map[string]struct{})
 	unmanagedResources := make(map[string]map[string]struct{})
+	managedASGs := make(map[string]struct{})
 
 	// Initialize maps for each resource type
-	resourceTypes := []string{"aws_instance", "aws_db_instance", "aws_lambda_function"}
+	resourceTypes := []string{"aws_instance", "aws_db_instance", "aws_lambda_function", "aws_autoscaling_group"}
 	for _, resourceType := range resourceTypes {
 		managedResources[resourceType] = make(map[string]struct{})
 		unmanagedResources[resourceType] = make(map[string]struct{})
 	}
 
 	for _, arn := range resourceIdentifiers {
-		managedResources[arn.Type][arn.ResourceID] = struct{}{}
-	}
-
-	// Check for EC2 instances
-	currentInstances, err := aws.ListEC2Instances(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, instanceID := range currentInstances {
-		if _, exists := managedResources["aws_instance"][instanceID]; !exists {
-			unmanagedResources["aws_instance"][instanceID] = struct{}{}
+		if arn.Type == "aws_autoscaling_group" {
+			managedASGs[arn.ResourceID] = struct{}{}
+			managedResources[arn.Type][arn.ResourceID] = struct{}{}
 		} else {
-			delete(unmanagedResources["aws_instance"], instanceID) // Ensure it's not in unmanaged if it is managed
+			managedResources[arn.Type][arn.ResourceID] = struct{}{}
 		}
 	}
 
-	// Check for RDS instances
-	currentRDSInstances, err := aws.ListRDSInstances(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, dbInstance := range currentRDSInstances {
-		dbInstanceIdentifier := *dbInstance.DBInstanceIdentifier
-		if _, exists := managedResources["aws_db_instance"][dbInstanceIdentifier]; !exists {
-			unmanagedResources["aws_db_instance"][dbInstanceIdentifier] = struct{}{}
-		} else {
-			delete(unmanagedResources["aws_db_instance"], dbInstanceIdentifier) // Ensure it's not in unmanaged if it is managed
+	// Check for resources in primary and additional regions
+	for _, region := range regions {
+		resources, err := aws.ListResourcesInRegion(cfg, region)
+		if err != nil {
+			return nil, nil, err
 		}
-	}
 
-	// Check for Lambda functions
-	currentLambdas, err := aws.ListLambdaFunctions(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, functionName := range currentLambdas {
-		if _, exists := managedResources["aws_lambda_function"][functionName]; !exists {
-			unmanagedResources["aws_lambda_function"][functionName] = struct{}{}
-		} else {
-			delete(unmanagedResources["aws_lambda_function"], functionName) // Ensure it's not in unmanaged if it is managed
+		// Check for resources in the region
+		for resourceType, resourceIDs := range resources {
+			for _, resourceID := range resourceIDs {
+				if resourceType == "aws_instance" {
+					// Check if the instance is part of a managed ASG
+					isManaged := false
+					for _, asg := range resources["aws_autoscaling_group"] {
+						if _, exists := managedASGs[asg]; exists {
+							isManaged = true
+							break
+						}
+					}
+					if isManaged {
+						managedResources[resourceType][resourceID] = struct{}{}
+						delete(unmanagedResources[resourceType], resourceID) // Ensure it's not in unmanaged if it is managed
+					} else {
+						if _, exists := managedResources[resourceType][resourceID]; !exists {
+							unmanagedResources[resourceType][resourceID] = struct{}{}
+						}
+					}
+				} else {
+					if _, exists := managedResources[resourceType][resourceID]; !exists {
+						unmanagedResources[resourceType][resourceID] = struct{}{}
+					} else {
+						delete(unmanagedResources[resourceType], resourceID) // Ensure it's not in unmanaged if it is managed
+					}
+				}
+			}
 		}
 	}
 
@@ -144,8 +148,8 @@ func FormatOutput(managedResources, unmanagedResources map[string]map[string]str
 	output := Output{
 		ManagedByIAC: managedOutput,
 		NotManaged:   unmanagedOutput,
-		TotalManaged: len(managedOutput["aws_instance"]) + len(managedOutput["aws_db_instance"]) + len(managedOutput["aws_lambda_function"]),
-		Unmanaged:    len(unmanagedOutput["aws_instance"]) + len(unmanagedOutput["aws_db_instance"]) + len(unmanagedOutput["aws_lambda_function"]),
+		TotalManaged: len(managedOutput["aws_instance"]) + len(managedOutput["aws_db_instance"]) + len(managedOutput["aws_lambda_function"]) + len(managedOutput["aws_autoscaling_group"]),
+		Unmanaged:    len(unmanagedOutput["aws_instance"]) + len(unmanagedOutput["aws_db_instance"]) + len(unmanagedOutput["aws_lambda_function"]) + len(unmanagedOutput["aws_autoscaling_group"]),
 	}
 
 	outputJSON, err := json.MarshalIndent(output, "", "  ")
