@@ -29,7 +29,7 @@ type TerraformState struct {
 	} `json:"resources"`
 }
 
-// ExtractResourceIdentifiers extracts identifiers for EC2 instances, RDS instances, Lambda functions, and ASGs from the Terraform state data
+// ExtractResourceIdentifiers extracts identifiers for EC2 instances, RDS instances, Lambda functions, ASGs, and EKS node groups from the Terraform state data
 func ExtractResourceIdentifiers(stateData []byte) ([]ARN, error) {
 	var tfState TerraformState
 	err := json.Unmarshal(stateData, &tfState)
@@ -39,7 +39,7 @@ func ExtractResourceIdentifiers(stateData []byte) ([]ARN, error) {
 
 	var arns []ARN
 	for _, resource := range tfState.Resources {
-		if resource.Type == "aws_instance" || resource.Type == "aws_db_instance" || resource.Type == "aws_lambda_function" || resource.Type == "aws_autoscaling_group" {
+		if resource.Type == "aws_instance" || resource.Type == "aws_db_instance" || resource.Type == "aws_lambda_function" || resource.Type == "aws_autoscaling_group" || resource.Type == "aws_eks_node_group" {
 			for _, instance := range resource.Instances {
 				var resourceID string
 				if resource.Type == "aws_db_instance" {
@@ -47,6 +47,25 @@ func ExtractResourceIdentifiers(stateData []byte) ([]ARN, error) {
 						resourceID = identifier
 					} else if id, ok := instance.Attributes["id"].(string); ok {
 						resourceID = id
+					}
+				} else if resource.Type == "aws_eks_node_group" {
+					if resources, ok := instance.Attributes["resources"].([]interface{}); ok {
+						for _, resource := range resources {
+							if resourceMap, ok := resource.(map[string]interface{}); ok {
+								if autoscalingGroups, ok := resourceMap["autoscaling_groups"].([]interface{}); ok {
+									for _, asg := range autoscalingGroups {
+										if asgMap, ok := asg.(map[string]interface{}); ok {
+											if name, ok := asgMap["name"].(string); ok {
+												arns = append(arns, ARN{
+													ResourceID: name,
+													Type:       "aws_autoscaling_group",
+												})
+											}
+										}
+									}
+								}
+							}
+						}
 					}
 				} else {
 					if id, ok := instance.Attributes["id"].(string); ok {
@@ -66,14 +85,14 @@ func ExtractResourceIdentifiers(stateData []byte) ([]ARN, error) {
 	return arns, nil
 }
 
-// DetectDriftForResources detects drift for EC2 instances, RDS instances, Lambda functions, and ASGs in the specified regions
+// DetectDriftForResources detects drift for EC2 instances, RDS instances, Lambda functions, ASGs, and EKS node groups in the specified regions
 func DetectDriftForResources(resourceIdentifiers []ARN, cfg initAws.Config, regions []string) (map[string]map[string]struct{}, map[string]map[string]struct{}, error) {
 	managedResources := make(map[string]map[string]struct{})
 	unmanagedResources := make(map[string]map[string]struct{})
 	managedASGs := make(map[string]struct{})
 
 	// Initialize maps for each resource type
-	resourceTypes := []string{"aws_instance", "aws_db_instance", "aws_lambda_function", "aws_autoscaling_group"}
+	resourceTypes := []string{"aws_instance", "aws_db_instance", "aws_lambda_function", "aws_autoscaling_group", "aws_eks_node_group"}
 	for _, resourceType := range resourceTypes {
 		managedResources[resourceType] = make(map[string]struct{})
 		unmanagedResources[resourceType] = make(map[string]struct{})

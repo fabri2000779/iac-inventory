@@ -25,7 +25,7 @@ func Run(cfg initAws.Config, regions []string) ([]byte, error) {
 	unmanagedResources := make(map[string]map[string]struct{})
 
 	// Initialize maps for each resource type
-	resourceTypes := []string{"aws_instance", "aws_db_instance", "aws_lambda_function", "aws_autoscaling_group"}
+	resourceTypes := []string{"aws_instance", "aws_db_instance", "aws_lambda_function", "aws_autoscaling_group", "aws_eks_node_group"}
 	for _, resourceType := range resourceTypes {
 		managedResources[resourceType] = make(map[string]struct{})
 		unmanagedResources[resourceType] = make(map[string]struct{})
