@@ -14,7 +14,7 @@ func ListBuckets(cfg aws.Config) ([]string, error) {
 	svc := s3.NewFromConfig(cfg)
 	resp, err := svc.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
 	if err != nil {
-		return nil, fmt.Errorf("unable to list buckets, %v", err)
+		return nil, fmt.Errorf("unable to list buckets: %v", err)
 	}
 
 	var buckets []string

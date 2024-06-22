@@ -2,9 +2,13 @@ package aws
 
 import (
 	"context"
+	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/organizations"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"log"
 	"os"
 )
@@ -32,12 +36,45 @@ func LoadAWSConfig(ctx context.Context) (aws.Config, error) {
 	return cfg, nil
 }
 
-func AwsConfigWithRegion(region string) aws.Config {
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithRegion(region),
-	)
+func AssumeRole(cfg aws.Config, roleArn string) (aws.Config, error) {
+	stsSvc := sts.NewFromConfig(cfg)
+
+	creds := stscreds.NewAssumeRoleProvider(stsSvc, roleArn)
+
+	// Create a new configuration with the assumed role credentials
+	newCfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithRegion(cfg.Region),
+		config.WithCredentialsProvider(creds))
 	if err != nil {
-		log.Fatalf("failed to load AWS config: %v", err)
+		return aws.Config{}, fmt.Errorf("failed to assume role: %v", err)
 	}
-	return cfg
+
+	return newCfg, nil
+}
+
+// ListAccounts lists all AWS accounts in the organization
+func ListAccounts(cfg aws.Config) ([]string, error) {
+	svc := organizations.NewFromConfig(cfg)
+	var accountIDs []string
+	var nextToken *string
+
+	for {
+		resp, err := svc.ListAccounts(context.TODO(), &organizations.ListAccountsInput{
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("unable to list accounts: %v", err)
+		}
+
+		for _, account := range resp.Accounts {
+			accountIDs = append(accountIDs, aws.ToString(account.Id))
+		}
+
+		if resp.NextToken == nil {
+			break
+		}
+		nextToken = resp.NextToken
+	}
+
+	return accountIDs, nil
 }
